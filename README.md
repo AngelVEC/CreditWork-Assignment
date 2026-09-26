@@ -4,6 +4,8 @@ A small web application for recording vehicles and managing configurable
 vehicle weight categories, built for the CreditWorks Software Engineer
 programming assignment.
 
+For more information about what changes, please see the `Notes.md` under docs folder
+
 - **Backend:** ASP.NET Core 8 Web API, C#, Entity Framework Core, SQL Server
 - **Frontend:** React 19 + TypeScript, Vite, Tailwind CSS, React Router
 
