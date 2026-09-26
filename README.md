@@ -1,0 +1,388 @@
+# CreditWorks Vehicle Register
+
+A small web application for recording vehicles and managing configurable
+vehicle weight categories, built for the CreditWorks Software Engineer
+programming assignment.
+
+- **Backend:** ASP.NET Core 8 Web API, C#, Entity Framework Core, SQL Server
+- **Frontend:** React 19 + TypeScript, Vite, Tailwind CSS, React Router
+
+---
+
+## 1. Setup
+
+### Required software
+
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- SQL Server 2019+ (SQL Server Express is fine) or a SQL Server container
+- [Node.js 20+](https://nodejs.org/) and npm
+- (Optional) `dotnet-ef` CLI tool if you later want real EF migrations — see
+  [Design Notes → Database creation](#database-creation-ensurecreated-vs-migrations).
+
+### Configuration
+
+Nothing sensitive is committed. `appsettings.json` ships with empty
+placeholders and `appsettings.Example.json` documents every key you need to
+supply. The API **will not start** without a connection string and will not
+seed an admin account without `SeedAdmin:Password` — this is deliberate (see
+[Security Considerations](#6-security-considerations)).
+
+Set these either as environment variables (double-underscore nesting, as
+shown) or via `dotnet user-secrets` in `backend/CreditWorks.Api`:
+
+```bash
+cd backend/CreditWorks.Api
+dotnet user-secrets init
+dotnet user-secrets set "ConnectionStrings:DefaultConnection" "Server=localhost\SQLEXPRESS;Database=CreditWorksVehicleApp;Trusted_Connection=True;TrustServerCertificate=True;"
+dotnet user-secrets set "Jwt:SigningKey" "a-long-random-string-at-least-32-characters"
+dotnet user-secrets set "SeedAdmin:Username" "admin"
+dotnet user-secrets set "SeedAdmin:Password" "choose-a-dev-only-password"
+```
+
+Or, equivalently, as environment variables:
+
+```bash
+export ConnectionStrings__DefaultConnection="Server=localhost\SQLEXPRESS;Database=CreditWorksVehicleApp;Trusted_Connection=True;TrustServerCertificate=True;"
+export Jwt__SigningKey="a-long-random-string-at-least-32-characters"
+export SeedAdmin__Username="admin"
+export SeedAdmin__Password="choose-a-dev-only-password"
+```
+
+### Database creation
+
+No manual schema setup is required. On startup the API calls
+`Database.EnsureCreated()` and seeds:
+
+- Manufacturers: Mazda, Mercedes, Honda, Ferrari, Toyota
+- Categories: Light (0–500kg), Medium (500–2500kg), Heavy (2500kg+)
+- One admin account, from `SeedAdmin:Username` / `SeedAdmin:Password`
+
+Just run the app once against an empty (but existing) database — see
+[§17 Database Design](#database-design) for why `EnsureCreated` was chosen
+over migrations here.
+
+### Build and run the backend
+
+```bash
+cd backend
+dotnet build
+dotnet run --project CreditWorks.Api
+```
+
+By default this listens on `http://localhost:5000` (see
+`CreditWorks.Api/Properties/launchSettings.json` if you customise the port —
+if you change it, also update `Cors:AllowedOrigin` and the frontend's
+`VITE_API_BASE_URL`). Swagger UI is available at `/swagger` in development.
+
+### Build and run the frontend
+
+```bash
+cd frontend
+cp .env.example .env.local   # adjust VITE_API_BASE_URL if you changed the API port
+npm install
+npm run dev
+```
+
+Opens at `http://localhost:5173`.
+
+### Run the automated tests
+
+```bash
+cd backend
+dotnet test
+```
+
+This runs both the unit tests (pure business-rule logic, no database) and
+the integration tests (full ASP.NET Core pipeline via
+`WebApplicationFactory`, against EF Core's InMemory provider — no SQL Server
+required to run the test suite).
+
+> **Note on this submission:** this backend was written in a sandboxed
+> environment without internet access to nuget.org, so it could not
+> actually be `dotnet restore`/`build`/`test`-verified here. It was written
+> carefully and the frontend (built with the same care) was fully installed,
+> built, and linted successfully. Please run `dotnet build` and
+> `dotnet test` as your first step — if anything doesn't compile, it should
+> be a small, mechanical fix (a namespace or package version), and I'm happy
+> to walk through it at interview.
+
+---
+
+## 2. Design Notes
+
+### Overall architecture
+
+Deliberately simple and un-layered beyond what the business rules need
+(per assignment §15/§22 — "not looking for unnecessary complexity"):
+
+```
+Controllers  →  Services (business rules)  →  AppDbContext (EF Core)  →  SQL Server
+   (HTTP)         (VehicleService,               (data access)
+                   CategoryService,
+                   AuthService,
+                   CategoryRangeValidator,
+                   CategoryResolver)
+```
+
+No repository layer on top of EF Core's `DbContext` (EF Core's `DbSet<T>`
+already *is* a repository/unit-of-work abstraction — wrapping it again would
+be exactly the kind of extra layer the brief warns against). Controllers are
+thin: they parse input, call a service, and translate the result to an HTTP
+response. All validation and business rules live in `Services/`, so they're
+unit-testable without spinning up ASP.NET Core or a database.
+
+### How manufacturers are represented
+
+A `Manufacturer` table, not an enum or hardcoded list (assignment §3: "not
+looking for manufacturers unnecessarily embedded throughout the
+application"). `Vehicle.ManufacturerId` is a normal foreign key. The
+`GET /api/manufacturers` endpoint lets the frontend populate the dropdown
+without any manufacturer name ever being hardcoded client-side either.
+Deleting a manufacturer that has vehicles is blocked by the FK constraint
+(`DeleteBehavior.Restrict`) rather than silently cascading — there's no
+delete endpoint for manufacturers in this exercise (not required by the
+brief), but the constraint is there for when one is added.
+
+### How vehicle categories are represented, and how ranges are stored
+
+A `VehicleCategory` table with `MinWeightKg` (inclusive) and `MaxWeightKg`
+(exclusive, nullable). **Range convention: `[Min, Max)`.** The one category
+whose `MaxWeightKg` is `null` is the unbounded top category ("and above").
+
+This is the key decision behind [§5.3 Boundary
+Handling](#category-boundary-rule): a vehicle weighing exactly `500.00kg`
+belongs to `Medium` (whose `Min` is 500), not `Light` (whose `Max` is 500),
+because the lower bound is inclusive and the upper bound is exclusive.
+`CategoryResolver.Resolve()` is the single place this rule is implemented:
+
+```csharp
+weightKg >= c.MinWeightKg && (c.MaxWeightKg == null || weightKg < c.MaxWeightKg.Value)
+```
+
+### Whether a vehicle's category is stored or calculated
+
+**Calculated, always, on every read.** `Vehicle` has no `CategoryId` column
+and no foreign key to `VehicleCategory` at all. `VehicleService` resolves
+each vehicle's category against the *current* set of categories every time
+the vehicle list (or a single vehicle) is fetched.
+
+This is what satisfies assignment §6 directly and unconditionally: if an
+admin edits a category's range, every existing vehicle's displayed category
+updates immediately, with no batch job, no "recalculate categories" button,
+and no possibility of a vehicle's stored category drifting out of sync with
+the category table. The trade-off is a bit more computation per read
+(resolving N vehicles against M categories, both fetched into memory) —
+irrelevant at this scale, and revisited under
+[Known limitations](#known-limitations) for a much larger dataset.
+
+### How category icons are represented
+
+Icons are a fixed, enumerated set of `lucide-react` icon names (e.g.
+`"Truck"`, `"Feather"`, `"Container"`). `VehicleCategory.IconKey` stores just
+that string key. No image upload, no binary storage, no external image
+hosting — the brief says "you may choose any suitable icons," and a closed
+icon-key set keeps this simple while still satisfying "assign an icon to
+each category" (§5) with a real, visible picker in the admin UI
+(`components/CategoryIcon.tsx` is the single place mapping key → icon;
+adding an icon to the app is a one-line change there).
+
+### How data integrity is maintained when category definitions change
+
+This is enforced by `CategoryRangeValidator`, called from `CategoryService`
+on **every** create, update, and delete of a category — never only on the
+one row being changed, but on the *entire proposed resulting set*:
+
+1. The set can't be empty (blocks deleting the last category).
+2. Every category's `Min < Max` (or `Max` is null).
+3. Sorted by `Min`, the lowest category's `Min` must be `0`.
+4. Sorted by `Min`, the highest category's `Max` must be `null`.
+5. For every adjacent pair (sorted by `Min`), `current.Max == next.Min` —
+   this single check simultaneously rules out both gaps (`current.Max <
+   next.Min`) and overlaps (`current.Max > next.Min`).
+
+Create/update/delete each run inside a database transaction, so a rejected
+change never partially applies. This validator is unit-tested directly
+against the two invalid examples given in the assignment brief itself (§5.1,
+§5.2), plus the boundary-move example from §6.
+
+<a id="category-boundary-rule"></a>
+**Boundary rule, stated plainly (documented per §5.3):** a category's
+minimum weight is inclusive; its maximum weight is exclusive. A vehicle
+weighing exactly on a shared boundary belongs to the category that boundary
+is the *minimum* of, never the one it's the *maximum* of.
+
+<a id="database-design"></a>
+### Database creation: `EnsureCreated()` vs. migrations
+
+The brief's own example list for "everything required to create or
+initialise the database" includes EF Core migrations, database creation
+scripts, seed data, *or* initialisation code — not migrations specifically.
+This solution uses `Database.EnsureCreatedAsync()` plus idempotent seed data
+(`Data/SeedData.cs`), run once at startup.
+
+**Why, given the brief also separately suggests Code-First migrations:**
+this was written and reviewed in an environment with no access to the .NET
+SDK or NuGet, so hand-writing the generated migration snapshot/designer
+files by hand — without being able to compile or run them — was judged
+riskier than a simpler, harder-to-get-wrong approach that still fully
+satisfies the actual requirement ("reviewer can clone, build, and run
+without reverse-engineering the schema"). The `AppDbContext` model is
+complete, so real migrations can be added in about one command whenever this
+is opened somewhere with the SDK available:
+
+```bash
+cd backend/CreditWorks.Api
+dotnet tool install --global dotnet-ef   # once
+dotnet ef migrations add InitialCreate
+dotnet ef database update
+```
+
+— at which point you'd swap `EnsureCreatedAsync()` for `MigrateAsync()` in
+`Program.cs`. I'm glad to do this and re-verify at interview if useful; I
+wanted to be upfront about the trade-off and why, rather than ship
+migration files that had never been compiled.
+
+### Sorting
+
+`GET /api/vehicles?sortBy=ownerName|manufacturer|year|weight&sortDir=asc|desc`.
+Sorting is applied server-side, after categories are resolved, so it's
+possible to sort by any of the four required columns; the frontend's table
+headers show the active column and direction and toggle direction on
+repeated clicks.
+
+### Validation
+
+Every write endpoint validates twice: ASP.NET Core's `[Required]`/model
+binding attributes give a fast first-pass rejection, and `VehicleService` /
+`CategoryService` re-validate everything (required fields, weight
+positivity, two-decimal-place precision, year sanity, category range rules)
+independently of the client — per §9, the app must not depend exclusively
+on browser-side (or even just attribute-side) validation. The frontend also
+validates client-side for immediate feedback, but every rule is re-checked
+server-side regardless of what the client sends.
+
+**Assumption (documented per §23):** "sensible" year of manufacture is
+interpreted as `1886` (the year the first automobile was patented) through
+`current year + 1` (allows next-model-year vehicles). This is enforced in
+both `VehicleFormPage.tsx` (client-side) and `VehicleService.cs`
+(server-side, authoritative).
+
+### Security considerations
+
+- **Server-side validation everywhere** — see above.
+- **SQL injection:** all data access goes through EF Core's parameterised
+  LINQ queries; there is no raw/interpolated SQL anywhere in the codebase.
+- **Auth:** category administration (`/api/categories/*`) requires a valid
+  admin session; vehicle/manufacturer endpoints are intentionally public,
+  matching the brief's "authentication is not required unless you choose to
+  implement it" (§16) — categories were the one area where I judged some
+  gate was worth adding, since letting anyone reconfigure weight ranges
+  (and thereby recategorise every vehicle) felt like the one piece of this
+  exercise closest to a real access-control boundary. It's deliberately
+  minimal: one seeded admin account, no registration flow, no password
+  reset — a full user-management system would be over-engineering for this
+  brief.
+- **Session token:** a JWT is issued on login but is **never exposed to
+  JavaScript** — it's set as an `HttpOnly`, `SameSite=Strict` cookie
+  (`Secure` outside of local dev), so it isn't readable by client-side
+  script and isn't sent cross-site. `[Authorize(Roles = "Admin")]` on
+  `CategoriesController` is what actually enforces this per-request; the
+  frontend's route guard (`RequireAdmin.tsx`) is a UX convenience only, not
+  the real boundary.
+- **Passwords:** hashed with ASP.NET Core's built-in `PasswordHasher<T>`
+  (PBKDF2), never stored or logged in plaintext. Login failures return an
+  identical, generic message whether the username or the password was
+  wrong (see `AuthFlowTests.Login_WithUnknownUsername_...`), so the
+  endpoint can't be used to enumerate valid usernames.
+- **Secrets:** no connection string, signing key, or password is committed.
+  `appsettings.json` ships with empty placeholders;
+  `appsettings.Example.json` documents every key without real values;
+  `appsettings.Development.json` is gitignored in case you create one
+  locally. The app **refuses to seed a default admin account** if
+  `SeedAdmin:Password` isn't set, rather than shipping a guessable default
+  credential like `admin`/`admin`.
+- **Error responses:** the global exception middleware
+  (`Middleware/ExceptionHandlingMiddleware.cs`) returns RFC 7807
+  `ProblemDetails` for expected errors (not found, validation, conflict)
+  and a generic "an unexpected error occurred" message — with the real
+  exception logged server-side only — for anything unhandled, so stack
+  traces never reach the client.
+
+### Error handling
+
+Custom exceptions (`NotFoundApiException`, `ValidationApiException`,
+`ConflictApiException`) map to `404`/`400`/`409` respectively via the global
+middleware; a category deletion that would break coverage returns `409
+Conflict` with a message naming the specific problem (gap/overlap/last
+category), not a generic failure.
+
+### Known limitations
+
+Documented deliberately, per §16 ("if you deliberately omit something...
+briefly note it"):
+
+- **No pagination** on the vehicle list — fine at small scale (this is an
+  internal register, not a public-facing product), but would need to be
+  added before this could handle thousands of vehicles well. Category
+  resolution is currently O(vehicles × categories) per request, done
+  in-memory after both tables are fetched; with a handful of categories
+  this is irrelevant, but at large scale I'd push the category match into
+  the SQL query itself (e.g. a computed column or a `CROSS APPLY`) rather
+  than resolving in C#.
+- **No manufacturer admin UI** — manufacturers can be read but not
+  created/edited/deleted through the API or UI, since the brief only
+  requires categories to be administrable. The `Manufacturer` model and FK
+  are already there, so this would be a small, additive change.
+- **Single hardcoded admin account**, seeded once at startup — no user
+  management, roles beyond "Admin", or password reset flow. Sufficient for
+  this exercise; a real deployment would want a proper identity provider.
+- **`EnsureCreated()` instead of migrations** — see
+  [Database creation](#database-creation-ensurecreated-vs-migrations) above.
+
+### If this had to support significantly more users or data
+
+(Anticipating the interview discussion in §25.) The category-resolution
+approach above would be the first thing to revisit at scale, followed by:
+adding pagination + server-side filtering to `GET /api/vehicles`; moving
+category resolution into SQL (or caching the small category table
+aggressively, since it changes rarely, and doing resolution against that
+cache); and introducing EF Core migrations properly for safer, incremental
+schema evolution once multiple people are working against the same
+database. The current architecture (thin controllers, isolated business
+logic in services, no ORM leaking into the API layer) shouldn't need to
+change shape for any of that — it's designed so those are additive changes,
+not a rewrite.
+
+---
+
+## 3. Project layout
+
+```
+CreditWorksVehicleApp/
+├── backend/
+│   ├── CreditWorks.Api/            # ASP.NET Core Web API
+│   │   ├── Controllers/
+│   │   ├── Services/                # business rules (unit-testable, no ASP.NET Core dependency)
+│   │   ├── Models/                  # EF Core entities
+│   │   ├── Dtos/
+│   │   ├── Data/                    # AppDbContext + seed data
+│   │   └── Middleware/
+│   ├── CreditWorks.Api.Tests/
+│   │   ├── Unit/                    # CategoryResolver, CategoryRangeValidator, VehicleService
+│   │   └── Integration/             # WebApplicationFactory + EF InMemory, full HTTP pipeline
+│   └── CreditWorksVehicleApp.sln
+├── frontend/                        # React + TypeScript + Vite + Tailwind
+│   └── src/
+│       ├── api/                     # typed fetch client
+│       ├── pages/                   # VehicleList, VehicleForm, CategoryAdmin, Login
+│       └── components/
+└── README.md                        # this file
+```
+
+## 4. What we'd cover at interview
+
+Per §25 of the brief, happy to walk through: the `[Min, Max)` boundary
+convention and why; why category is computed rather than stored; the
+`EnsureCreated`-vs-migrations trade-off above; the cookie-based auth design;
+and how I'd extend this for a new business requirement (e.g. per-owner
+vehicle limits, or manufacturer administration).

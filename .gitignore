@@ -1,5 +1,28 @@
+# --- .NET ---
+bin/
+obj/
+*.user
+*.suo
+.vs/
 appsettings.Development.json
-appsettings.*.local.json
+appsettings.Local.json
+*.db
+*.mdf
+*.ldf
+
+# --- Node / frontend ---
+node_modules/
+dist/
+dist-ssr/
+*.local
 .env
-.env.local
-*.pfx
+.env.*.local
+
+# --- IDE ---
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# --- OS ---
+.DS_Store
+Thumbs.db
