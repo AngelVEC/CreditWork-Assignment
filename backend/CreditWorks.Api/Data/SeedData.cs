@@ -53,25 +53,8 @@ public static class SeedData
 
         if (!await db.Vehicles.AnyAsync())
         {
-            var m = await db.Manufacturers.ToDictionaryAsync(x => x.Name, x => x.Id);
-
-            // Spans all three seeded categories (Light/Medium/Heavy) and a
-            // range of owners/manufacturers/years/weights, so the app has
-            // something to look at (and search) on first run instead of an
-            // empty list.
-            db.Vehicles.AddRange(
-                new Vehicle { OwnerName = "John Smith", ManufacturerId = m["Mazda"], YearOfManufacture = 2019, WeightKg = 320.00m },
-                new Vehicle { OwnerName = "Jane Turei", ManufacturerId = m["Mercedes"], YearOfManufacture = 2015, WeightKg = 1850.75m },
-                new Vehicle { OwnerName = "Aroha Ngata", ManufacturerId = m["Honda"], YearOfManufacture = 2021, WeightKg = 420.50m },
-                new Vehicle { OwnerName = "Mike Chen", ManufacturerId = m["Toyota"], YearOfManufacture = 2018, WeightKg = 1490.00m },
-                new Vehicle { OwnerName = "Sarah Williams", ManufacturerId = m["Ferrari"], YearOfManufacture = 2022, WeightKg = 1435.20m },
-                new Vehicle { OwnerName = "David Lee", ManufacturerId = m["Mercedes"], YearOfManufacture = 2020, WeightKg = 2680.00m },
-                new Vehicle { OwnerName = "Emily Clarke", ManufacturerId = m["Toyota"], YearOfManufacture = 2016, WeightKg = 3200.00m },
-                new Vehicle { OwnerName = "Tom Baker", ManufacturerId = m["Mazda"], YearOfManufacture = 2023, WeightKg = 1150.00m },
-                new Vehicle { OwnerName = "Hemi Walker", ManufacturerId = m["Honda"], YearOfManufacture = 2017, WeightKg = 480.30m },
-                new Vehicle { OwnerName = "Grace Kim", ManufacturerId = m["Toyota"], YearOfManufacture = 2024, WeightKg = 2950.00m }
-            );
-
+            var manufacturerIds = await db.Manufacturers.Select(x => x.Id).ToListAsync();
+            db.Vehicles.AddRange(GenerateSeedVehicles(manufacturerIds, count: 50));
             await db.SaveChangesAsync();
         }
 
@@ -99,5 +82,63 @@ public static class SeedData
 
             logger.LogInformation("Seeded dev admin account '{Username}'. This is a development-only default — never use it in production.", username);
         }
+    }
+
+    private static readonly string[] FirstNames =
+    {
+        "John", "Jane", "Aroha", "Mike", "Sarah", "David", "Emily", "Tom", "Hemi", "Grace",
+        "Liam", "Olivia", "Noah", "Ava", "Ethan", "Mia", "Lucas", "Sophia", "Mason", "Isabella",
+        "Logan", "Charlotte", "Amelia", "Wiremu", "Kiri", "Manaia", "Priya", "Raj", "Wei", "Yuki"
+    };
+
+    private static readonly string[] LastNames =
+    {
+        "Smith", "Turei", "Ngata", "Chen", "Williams", "Lee", "Clarke", "Baker", "Walker", "Kim",
+        "Brown", "Davies", "Wilson", "Taylor", "Anderson", "Thomas", "Jackson", "White", "Harris", "Martin"
+    };
+
+    /// <summary>
+    /// Generates realistic-looking vehicles spread evenly across the
+    /// three seeded categories (Light/Medium/Heavy weight bands) and across
+    /// owners/manufacturers/years, so the app has something to browse,
+    /// sort, and search on first run. Uses a fixed random seed so the
+    /// generated data is reproducible across runs/environments rather than
+    /// different every time the (empty) database is first created.
+    /// </summary>
+    private static IEnumerable<Vehicle> GenerateSeedVehicles(IReadOnlyList<int> manufacturerIds, int count)
+    {
+        var random = new Random(Seed: 42);
+        var maxYear = DateTime.UtcNow.Year;
+
+        for (var i = 0; i < count; i++)
+        {
+            var ownerName = $"{FirstNames[i % FirstNames.Length]} {LastNames[(i * 7) % LastNames.Length]}";
+            var manufacturerId = manufacturerIds[random.Next(manufacturerIds.Count)];
+            var year = random.Next(1990, maxYear + 1);
+
+            // Cycle through the three weight bands so the seed data isn't
+            // skewed toward one category (roughly a third Light, a third
+            // Medium, a third Heavy).
+            var weightKg = (i % 3) switch
+            {
+                0 => RandomWeight(random, 10m, 490m),     // Light band (0-500kg)
+                1 => RandomWeight(random, 550m, 2450m),   // Medium band (500-2500kg)
+                _ => RandomWeight(random, 2600m, 6000m),  // Heavy band (2500kg+)
+            };
+
+            yield return new Vehicle
+            {
+                OwnerName = ownerName,
+                ManufacturerId = manufacturerId,
+                YearOfManufacture = year,
+                WeightKg = weightKg
+            };
+        }
+    }
+
+    private static decimal RandomWeight(Random random, decimal min, decimal max)
+    {
+        var fraction = (decimal)random.NextDouble();
+        return decimal.Round(min + fraction * (max - min), 2);
     }
 }
