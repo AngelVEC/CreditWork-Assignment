@@ -21,6 +21,7 @@ export const vehiclesApi = {
 
 export const manufacturersApi = {
   list: () => api.get<Manufacturer[]>("/api/manufacturers"),
+  create: (name: string) => api.post<Manufacturer>("/api/manufacturers", { name }),
 };
 
 export const categoriesApi = {

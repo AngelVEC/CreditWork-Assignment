@@ -13,8 +13,22 @@ export default function App() {
       <main className="mx-auto max-w-5xl px-4 py-8">
         <Routes>
           <Route path="/" element={<VehicleListPage />} />
-          <Route path="/vehicles/new" element={<VehicleFormPage />} />
-          <Route path="/vehicles/:id/edit" element={<VehicleFormPage />} />
+          <Route
+            path="/vehicles/new"
+            element={
+              <RequireAdmin>
+                <VehicleFormPage />
+              </RequireAdmin>
+            }
+          />
+          <Route
+            path="/vehicles/:id/edit"
+            element={
+              <RequireAdmin>
+                <VehicleFormPage />
+              </RequireAdmin>
+            }
+          />
           <Route path="/admin/login" element={<LoginPage />} />
           <Route
             path="/admin/categories"
