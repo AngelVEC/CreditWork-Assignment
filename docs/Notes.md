@@ -1,5 +1,3 @@
-Disclaimer, this Project was created with the help of Claude free plan.
-
 # Day 1: Planning
 When I got the assigment task about this project, Firstly I read all the requirements needed for this assignment.
 and then I converse with claude regarding the document, and asking him to create `Build_instruction.md` where it will be used as foundation of the application that I will create.
@@ -26,6 +24,7 @@ if we change the value of `light` from 0 to 600kg, `medium` category will also a
 - Fixed a bug where the input box on categories setting is non-modifable after the user typed something that is not a number.
 - Added a confirmation in the frontend, whenever the value of vehicle weight categories intersect with other categories, before it got send to the backend.
 - Adding cascade logic into creation, edit, and delete of vehicle weight categories (Will be explained later)
+- Adding new function on manufacturer where user can directly add new manufacturer when required
 
 
 # Design Choice
@@ -81,3 +80,11 @@ Table Preview:
 |---|---|
 | Light | 0 - 2500 KG |
 | Heavy | 2500 and Above |
+
+## Vehicles Manufactures
+This part is quite straightforward, beside of the limited manufacturer list, I added new post method in the backend, where user able to add another manufacturer into database. and use it to register a vehicle.
+The reasoning behind this is, there is a chance where there will be a new manufacturer in the future, that is not in the list. Instead of later on required the developer to manually enter the manufacturer name into the database, with this approach, it can seamslessly added by the user(admin) itself.
+
+## Vehicle Weight Category
+I am not saving any information of vehicle of category into the database, because if there is any changes on vehicles weight, that means we also need to change the category of that vehicles. That also same with the changes of `vehicle categories`, when Light, Medium, or Heavy had any changes, that means we need to do another update on the vehicle data, when there is more than million of data, that might create a bottleneck on the database because you need to search all vehicles that got affected by this change.
+My approach was simple, what I do is, grabbing the information of the vehicle and the categories, when the weight are within the categories range, that will be the value of that vehicle's category.

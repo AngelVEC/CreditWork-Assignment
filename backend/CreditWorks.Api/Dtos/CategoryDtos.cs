@@ -27,9 +27,3 @@ public class CategoryRequest
     /// <summary>Null means "unbounded" — only exactly one category may have this.</summary>
     public decimal? MaxWeightKg { get; set; }
 }
-
-public class ManufacturerResponse
-{
-    public int Id { get; set; }
-    public string Name { get; set; } = string.Empty;
-}

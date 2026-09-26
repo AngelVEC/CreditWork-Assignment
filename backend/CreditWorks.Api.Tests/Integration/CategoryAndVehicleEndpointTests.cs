@@ -74,16 +74,14 @@ public class CategoryAndVehicleEndpointTests : IDisposable
         var manufacturers = await adminClient.GetFromJsonAsync<List<ManufacturerResponse>>("/api/manufacturers");
         var manufacturerId = manufacturers!.First().Id;
 
-        var publicClient = _factory.CreateClient();
-
-        await publicClient.PostAsJsonAsync("/api/vehicles", new VehicleRequest
+        await adminClient.PostAsJsonAsync("/api/vehicles", new VehicleRequest
         {
             OwnerName = "Light Owner",
             ManufacturerId = manufacturerId,
             YearOfManufacture = 2020,
             WeightKg = 100m
         });
-        await publicClient.PostAsJsonAsync("/api/vehicles", new VehicleRequest
+        await adminClient.PostAsJsonAsync("/api/vehicles", new VehicleRequest
         {
             OwnerName = "Heavy Owner",
             ManufacturerId = manufacturerId,
@@ -91,6 +89,9 @@ public class CategoryAndVehicleEndpointTests : IDisposable
             WeightKg = 5000m
         });
 
+        // Reading the list back doesn't require auth, even though creating
+        // the vehicles above did — GET stays public.
+        var publicClient = _factory.CreateClient();
         var response = await publicClient.GetAsync("/api/vehicles?sortBy=weight&sortDir=desc");
         response.StatusCode.Should().Be(HttpStatusCode.OK);
 
@@ -100,9 +101,51 @@ public class CategoryAndVehicleEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task CreateVehicle_MissingRequiredFields_Returns400()
+    public async Task CreateVehicle_WithoutLogin_Returns401()
     {
         var client = _factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/vehicles", new VehicleRequest
+        {
+            OwnerName = "Nobody",
+            ManufacturerId = 1,
+            YearOfManufacture = 2020,
+            WeightKg = 1000m
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task UpdateVehicle_WithoutLogin_Returns401()
+    {
+        var client = _factory.CreateClient();
+
+        var response = await client.PutAsJsonAsync("/api/vehicles/1", new VehicleRequest
+        {
+            OwnerName = "Nobody",
+            ManufacturerId = 1,
+            YearOfManufacture = 2020,
+            WeightKg = 1000m
+        });
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task DeleteVehicle_WithoutLogin_Returns401()
+    {
+        var client = _factory.CreateClient();
+
+        var response = await client.DeleteAsync("/api/vehicles/1");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task CreateVehicle_LoggedInButMissingRequiredFields_Returns400()
+    {
+        var client = await NewAuthenticatedClientAsync();
 
         var response = await client.PostAsJsonAsync("/api/vehicles", new { });
 
@@ -120,11 +163,14 @@ public class CategoryAndVehicleEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task VehiclesAndManufacturers_AreAccessibleWithoutAuth()
+    public async Task ReadingVehiclesAndManufacturers_DoesNotRequireAuth_ButWritingDoes()
     {
-        var client = _factory.CreateClient();
+        var anonymous = _factory.CreateClient();
 
-        (await client.GetAsync("/api/vehicles")).StatusCode.Should().Be(HttpStatusCode.OK);
-        (await client.GetAsync("/api/manufacturers")).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await anonymous.GetAsync("/api/vehicles")).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await anonymous.GetAsync("/api/manufacturers")).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        (await anonymous.PostAsJsonAsync("/api/vehicles", new { })).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        (await anonymous.PostAsJsonAsync("/api/manufacturers", new { Name = "Skoda" })).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 }
