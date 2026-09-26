@@ -41,24 +41,88 @@ public class CategoryService : ICategoryService
             throw new ValidationApiException($"A category named '{request.Name}' already exists.");
         }
 
+        var newMin = request.MinWeightKg;
+        var newMax = request.MaxWeightKg;
+
+        // Tracked entities — mutating them here and SaveChangesAsync below persists the cascade too.
+        var existing = await _db.VehicleCategories.ToListAsync();
+        var newRemainders = new List<VehicleCategory>();
+
+        // Cascade: if the new category's range eats into an existing
+        // category, adjust that category to make room instead of rejecting
+        // the request as an overlap. For each existing category `other`
+        // that the new range overlaps at all, classify the overlap:
+        //   - touches `other`'s bottom AND reaches at/past its top  -> new
+        //     range fully engulfs `other`. Not auto-resolved (ambiguous —
+        //     would mean deleting `other` outright); left for the final
+        //     validation below to reject with a clear error.
+        //   - touches `other`'s bottom only                        -> Rule 2:
+        //     `other` shrinks from below (its Min moves up to newMax).
+        //   - reaches `other`'s top only                           -> Rule 1:
+        //     `other` shrinks from above (its Max moves down to newMin).
+        //   - touches neither edge (new sits strictly inside `other`) ->
+        //     three-way split: `other` becomes the *lower* remainder
+        //     (keeps its name, ends at newMin), and a new category is
+        //     created for the *upper* remainder (auto-named, e.g.
+        //     "Medium (2)"), covering newMax through `other`'s old max.
+        foreach (var other in existing)
+        {
+            var otherReachesPastNewMin = other.MaxWeightKg is null || other.MaxWeightKg.Value > newMin;
+            var newReachesPastOtherMin = newMax is null || newMax.Value > other.MinWeightKg;
+            var overlaps = otherReachesPastNewMin && newReachesPastOtherMin;
+            if (!overlaps) continue;
+
+            var touchesBottom = newMin <= other.MinWeightKg;
+            var reachesTop = newMax is null || (other.MaxWeightKg is not null && newMax.Value >= other.MaxWeightKg.Value);
+
+            if (touchesBottom && reachesTop)
+            {
+                continue; // full engulf — unsupported, let validation below reject it clearly
+            }
+
+            if (touchesBottom)
+            {
+                other.MinWeightKg = newMax!.Value; // Rule 2
+            }
+            else if (reachesTop)
+            {
+                other.MaxWeightKg = newMin; // Rule 1
+            }
+            else
+            {
+                // Three-way split.
+                var originalMax = other.MaxWeightKg;
+                other.MaxWeightKg = newMin;
+
+                var takenNames = existing.Select(c => c.Name).Append(request.Name.Trim());
+                var remainderName = GenerateRemainderName(other.Name, takenNames);
+
+                newRemainders.Add(new VehicleCategory
+                {
+                    Name = remainderName,
+                    IconKey = other.IconKey,
+                    MinWeightKg = newMax!.Value,
+                    MaxWeightKg = originalMax
+                });
+            }
+        }
+
         var proposed = new VehicleCategory
         {
             Name = request.Name.Trim(),
             IconKey = request.IconKey.Trim(),
-            MinWeightKg = request.MinWeightKg,
-            MaxWeightKg = request.MaxWeightKg
+            MinWeightKg = newMin,
+            MaxWeightKg = newMax
         };
 
-        var existing = await _db.VehicleCategories.ToListAsync();
-        var proposedSet = existing.Concat(new[] { proposed });
-
-        var validation = _validator.Validate(proposedSet);
+        var validation = _validator.Validate(existing.Concat(newRemainders).Append(proposed));
         if (!validation.IsValid)
         {
             throw new ValidationApiException(validation.Errors);
         }
 
         _db.VehicleCategories.Add(proposed);
+        _db.VehicleCategories.AddRange(newRemainders);
         await _db.SaveChangesAsync();
         await transaction.CommitAsync();
 
@@ -144,6 +208,25 @@ public class CategoryService : ICategoryService
 
         var remaining = await _db.VehicleCategories.Where(c => c.Id != id).ToListAsync();
 
+        // Cascade: absorb the deleted category's range into whichever
+        // neighbor touches it, rather than just rejecting the deletion
+        // outright because it would otherwise leave a gap. Prefer
+        // extending the neighbor *below* (it grows upward to cover the
+        // deleted range); if there is no lower neighbor — i.e. the very
+        // bottom (0kg) category is being deleted — extend the neighbor
+        // *above* back down to 0 instead.
+        var lowerNeighbor = remaining.FirstOrDefault(c => c.MaxWeightKg == category.MinWeightKg);
+        var upperNeighbor = remaining.FirstOrDefault(c => c.MinWeightKg == category.MaxWeightKg);
+
+        if (lowerNeighbor is not null)
+        {
+            lowerNeighbor.MaxWeightKg = category.MaxWeightKg;
+        }
+        else if (upperNeighbor is not null)
+        {
+            upperNeighbor.MinWeightKg = category.MinWeightKg;
+        }
+
         var validation = _validator.Validate(remaining);
         if (!validation.IsValid)
         {
@@ -155,6 +238,25 @@ public class CategoryService : ICategoryService
         _db.VehicleCategories.Remove(category);
         await _db.SaveChangesAsync();
         await transaction.CommitAsync();
+    }
+
+    /// <summary>
+    /// Produces a unique name for a split-off remainder category, deriving
+    /// from the original category's name (e.g. "Medium" -&gt; "Medium (2)",
+    /// or "Medium (3)" if "(2)" is somehow already taken).
+    /// </summary>
+    private static string GenerateRemainderName(string baseName, IEnumerable<string> takenNames)
+    {
+        var taken = new HashSet<string>(takenNames, StringComparer.OrdinalIgnoreCase);
+        var counter = 2;
+        string candidate;
+        do
+        {
+            candidate = $"{baseName} ({counter})";
+            counter++;
+        } while (taken.Contains(candidate));
+
+        return candidate;
     }
 
     private static CategoryResponse ToResponse(VehicleCategory c) => new()

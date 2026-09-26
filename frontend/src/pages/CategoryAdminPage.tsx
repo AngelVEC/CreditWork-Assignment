@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Plus, Pencil, Trash2, X, ArrowRight, Check } from "lucide-react";
+import { Plus, Pencil, Trash2, X, ArrowRight, Check, Split } from "lucide-react";
 import { categoriesApi } from "../api/endpoints";
 import { ApiError } from "../api/client";
 import { CategoryIcon, ICON_CHOICES } from "../components/CategoryIcon";
@@ -7,47 +7,148 @@ import { ErrorBanner } from "../components/Feedback";
 import type { Category, CategoryInput } from "../types";
 
 /** A neighboring category's boundary that will move automatically to stay adjacent. */
-interface CascadeChange {
+interface BoundaryChange {
+  kind: "boundary";
   neighborName: string;
   field: "minimum" | "maximum";
   oldValue: number | null;
   newValue: number | null;
 }
 
+/** An existing category that will be split in two around the new category. */
+interface SplitChange {
+  kind: "split";
+  categoryName: string;
+  lowerMin: number;
+  lowerMax: number;
+  upperRemainderName: string;
+  upperMin: number;
+  upperMax: number | null;
+}
+
+type ConfirmationChange = BoundaryChange | SplitChange;
+
+/** A save/delete action waiting on the user to confirm its side effects. */
+interface PendingConfirmation {
+  title: string;
+  description: string;
+  changes: ConfirmationChange[];
+  confirmLabel: string;
+  danger?: boolean;
+  run: () => Promise<void>;
+}
+
 function formatKg(value: number | null): string {
   return value === null ? "unbounded" : `${value.toFixed(2)}kg`;
 }
 
-/**
- * Mirrors the server's cascade logic (CategoryService.UpdateAsync) so the
- * user sees, before saving, exactly which neighboring category will also
- * change — rather than that change happening silently.
- */
-function computeCascade(
+function formatRange(min: number, max: number | null): string {
+  return `${min.toFixed(2)}kg \u2013 ${max === null ? "and above" : `${max.toFixed(2)}kg`}`;
+}
+
+// --- Cascade prediction, mirroring the server's logic in CategoryService --
+// so the confirmation panel shows exactly what will happen before it does.
+
+/** Edit: a category's boundary moved — find the neighbor that shared it. */
+function computeEditCascade(
   categories: Category[],
   editingId: number,
   original: Category,
   newMin: number,
   newMax: number | null
-): CascadeChange[] {
-  const changes: CascadeChange[] = [];
+): BoundaryChange[] {
+  const changes: BoundaryChange[] = [];
 
   if (newMin !== original.minWeightKg) {
     const neighbor = categories.find((c) => c.id !== editingId && c.maxWeightKg === original.minWeightKg);
     if (neighbor) {
-      changes.push({ neighborName: neighbor.name, field: "maximum", oldValue: neighbor.maxWeightKg, newValue: newMin });
+      changes.push({ kind: "boundary", neighborName: neighbor.name, field: "maximum", oldValue: neighbor.maxWeightKg, newValue: newMin });
     }
   }
 
   if (newMax !== original.maxWeightKg) {
     const neighbor = categories.find((c) => c.id !== editingId && c.minWeightKg === original.maxWeightKg);
     if (neighbor) {
-      changes.push({ neighborName: neighbor.name, field: "minimum", oldValue: neighbor.minWeightKg, newValue: newMax });
+      changes.push({ kind: "boundary", neighborName: neighbor.name, field: "minimum", oldValue: neighbor.minWeightKg, newValue: newMax });
     }
   }
 
   return changes;
 }
+
+function generateRemainderName(baseName: string, takenNames: string[]): string {
+  const taken = new Set(takenNames.map((n) => n.toLowerCase()));
+  let counter = 2;
+  let candidate = `${baseName} (${counter})`;
+  while (taken.has(candidate.toLowerCase())) {
+    counter++;
+    candidate = `${baseName} (${counter})`;
+  }
+  return candidate;
+}
+
+/**
+ * Create: classifies how the new range interacts with each existing
+ * category — touches its bottom edge, reaches past its top edge, both
+ * (full engulf, unsupported), or neither (strictly inside -> three-way
+ * split). Mirrors CategoryService.CreateAsync exactly.
+ */
+function computeCreateCascade(categories: Category[], newName: string, newMin: number, newMax: number | null): ConfirmationChange[] {
+  const changes: ConfirmationChange[] = [];
+  const takenNames = categories.map((c) => c.name).concat(newName);
+
+  for (const other of categories) {
+    const otherReachesPastNewMin = other.maxWeightKg === null || other.maxWeightKg > newMin;
+    const newReachesPastOtherMin = newMax === null || newMax > other.minWeightKg;
+    const overlaps = otherReachesPastNewMin && newReachesPastOtherMin;
+    if (!overlaps) continue;
+
+    const touchesBottom = newMin <= other.minWeightKg;
+    const reachesTop = newMax === null || (other.maxWeightKg !== null && newMax >= other.maxWeightKg);
+
+    if (touchesBottom && reachesTop) {
+      continue; // full engulf — unsupported, will fail validation with a clear error
+    }
+
+    if (touchesBottom) {
+      changes.push({ kind: "boundary", neighborName: other.name, field: "minimum", oldValue: other.minWeightKg, newValue: newMax });
+    } else if (reachesTop) {
+      changes.push({ kind: "boundary", neighborName: other.name, field: "maximum", oldValue: other.maxWeightKg, newValue: newMin });
+    } else {
+      const remainderName = generateRemainderName(other.name, takenNames);
+      changes.push({
+        kind: "split",
+        categoryName: other.name,
+        lowerMin: other.minWeightKg,
+        lowerMax: newMin,
+        upperRemainderName: remainderName,
+        upperMin: newMax as number,
+        upperMax: other.maxWeightKg,
+      });
+    }
+  }
+
+  return changes;
+}
+
+/** Delete: which neighbor will absorb the deleted range (lower neighbor preferred)? */
+function computeDeleteAbsorption(categories: Category[], deleted: Category): BoundaryChange | null {
+  const others = categories.filter((c) => c.id !== deleted.id);
+
+  const lowerNeighbor = others.find((c) => c.maxWeightKg === deleted.minWeightKg);
+  if (lowerNeighbor) {
+    return { kind: "boundary", neighborName: lowerNeighbor.name, field: "maximum", oldValue: lowerNeighbor.maxWeightKg, newValue: deleted.maxWeightKg };
+  }
+
+  const upperNeighbor = others.find((c) => c.minWeightKg === deleted.maxWeightKg);
+  if (upperNeighbor) {
+    return { kind: "boundary", neighborName: upperNeighbor.name, field: "minimum", oldValue: upperNeighbor.minWeightKg, newValue: deleted.minWeightKg };
+  }
+
+  return null;
+}
+
+const defaultIconKey = ICON_CHOICES[0];
 
 export function CategoryAdminPage() {
   const [categories, setCategories] = useState<Category[] | null>(null);
@@ -60,21 +161,20 @@ export function CategoryAdminPage() {
   // mid-edit state like "-" or "" or "12." never gets coerced into NaN and
   // "stuck" in the box — they're only parsed to numbers on submit.
   const [name, setName] = useState("");
-  const [iconKey, setIconKey] = useState(ICON_CHOICES[0]);
+  const [iconKey, setIconKey] = useState(defaultIconKey);
   const [minWeightInput, setMinWeightInput] = useState("0");
   const [maxWeightInput, setMaxWeightInput] = useState("");
 
   const [formErrors, setFormErrors] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
 
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  // Set only when a save would also move a neighboring category's boundary
-  // — the confirmation panel is shown instead of saving immediately.
-  const [pendingCascade, setPendingCascade] = useState<CascadeChange[] | null>(null);
-  const [pendingValues, setPendingValues] = useState<{ minWeightKg: number; maxWeightKg: number | null } | null>(
-    null
-  );
+  // Set whenever a save or delete would have a side effect the user should
+  // see and approve first: a neighboring category's boundary moving, an
+  // existing category being split in two, or a deleted range being
+  // absorbed into a neighbor.
+  const [pending, setPending] = useState<PendingConfirmation | null>(null);
 
   function reload() {
     categoriesApi
@@ -88,20 +188,15 @@ export function CategoryAdminPage() {
 
   useEffect(reload, []);
 
-  function resetFormState() {
-    setFormErrors([]);
-    setPendingCascade(null);
-    setPendingValues(null);
-  }
-
   function startCreate() {
     setEditingId("new");
     setOriginalCategory(null);
     setName("");
-    setIconKey(ICON_CHOICES[0]);
+    setIconKey(defaultIconKey);
     setMinWeightInput("0");
     setMaxWeightInput("");
-    resetFormState();
+    setFormErrors([]);
+    setPending(null);
   }
 
   function startEdit(category: Category) {
@@ -111,13 +206,15 @@ export function CategoryAdminPage() {
     setIconKey(category.iconKey);
     setMinWeightInput(String(category.minWeightKg));
     setMaxWeightInput(category.maxWeightKg === null ? "" : String(category.maxWeightKg));
-    resetFormState();
+    setFormErrors([]);
+    setPending(null);
   }
 
   function cancelForm() {
     setEditingId(null);
     setOriginalCategory(null);
-    resetFormState();
+    setFormErrors([]);
+    setPending(null);
   }
 
   /** Validates + parses the free-typed weight strings. Returns null (with formErrors set) if invalid. */
@@ -161,11 +258,10 @@ export function CategoryAdminPage() {
       }
       setEditingId(null);
       setOriginalCategory(null);
-      resetFormState();
+      setPending(null);
       reload();
     } catch (err) {
-      setPendingCascade(null);
-      setPendingValues(null);
+      setPending(null);
       if (err instanceof ApiError) {
         setFormErrors(err.problem?.errors ?? [err.message]);
       } else {
@@ -181,16 +277,30 @@ export function CategoryAdminPage() {
     if (editingId === null) return;
 
     const input = parseForm();
-    if (!input) return;
+    if (!input || !categories) return;
 
-    // Editing an existing category whose boundary touches a neighbor:
-    // show what will also change instead of saving immediately.
-    if (editingId !== "new" && originalCategory && categories) {
-      const cascade = computeCascade(categories, editingId, originalCategory, input.minWeightKg, input.maxWeightKg);
-      if (cascade.length > 0) {
-        setFormErrors([]);
-        setPendingCascade(cascade);
-        setPendingValues({ minWeightKg: input.minWeightKg, maxWeightKg: input.maxWeightKg });
+    if (editingId === "new") {
+      const changes = computeCreateCascade(categories, input.name, input.minWeightKg, input.maxWeightKg);
+      if (changes.length > 0) {
+        setPending({
+          title: "Confirm new category",
+          description: describeChanges("add", input.name, changes),
+          changes,
+          confirmLabel: "Confirm & add",
+          run: () => saveCategory(input),
+        });
+        return;
+      }
+    } else if (originalCategory) {
+      const changes = computeEditCascade(categories, editingId, originalCategory, input.minWeightKg, input.maxWeightKg);
+      if (changes.length > 0) {
+        setPending({
+          title: "Confirm boundary change",
+          description: describeChanges("edit", input.name, changes),
+          changes,
+          confirmLabel: "Confirm & save",
+          run: () => saveCategory(input),
+        });
         return;
       }
     }
@@ -198,26 +308,49 @@ export function CategoryAdminPage() {
     await saveCategory(input);
   }
 
-  async function confirmCascadeAndSave() {
-    if (!pendingValues) return;
-    await saveCategory({ name: name.trim(), iconKey, minWeightKg: pendingValues.minWeightKg, maxWeightKg: pendingValues.maxWeightKg });
+  function describeChanges(kind: "add" | "edit", categoryName: string, changes: ConfirmationChange[]): string {
+    const hasSplit = changes.some((c) => c.kind === "split");
+    const verb = kind === "add" ? "Adding" : "Saving";
+
+    if (hasSplit) {
+      return `${verb} "${categoryName}" lands inside an existing category's range, so it will be split into two around it. Here's exactly what will change:`;
+    }
+
+    const plural = changes.length > 1;
+    return kind === "add"
+      ? `Adding "${categoryName}" will also adjust the ${plural ? "neighboring categories" : "neighboring category"} that share${plural ? "" : "s"} its boundaries:`
+      : `Since category ranges can't have gaps or overlaps, this will also move the ${plural ? "neighboring categories" : "neighboring category"} that share${plural ? "" : "s"} this boundary:`;
   }
 
-  async function handleDelete(category: Category) {
-    if (!window.confirm(`Delete category "${category.name}"? This cannot be undone.`)) return;
-
-    setDeleteError(null);
+  async function performDelete(category: Category) {
+    setActionError(null);
     try {
       await categoriesApi.remove(category.id);
+      setPending(null);
       reload();
     } catch (err) {
-      setDeleteError(
-        err instanceof ApiError ? err.message : `Could not delete "${category.name}".`
-      );
+      setPending(null);
+      setActionError(err instanceof ApiError ? err.message : `Could not delete "${category.name}".`);
     }
   }
 
-  const showingCascadeConfirmation = pendingCascade !== null && pendingCascade.length > 0;
+  function requestDelete(category: Category) {
+    setEditingId(null);
+    setActionError(null);
+
+    const absorption = categories ? computeDeleteAbsorption(categories, category) : null;
+
+    setPending({
+      title: "Confirm delete",
+      description: absorption
+        ? `Deleting "${category.name}" will extend "${absorption.neighborName}" to cover its range, so every weight still has a category:`
+        : `Delete category "${category.name}"? This cannot be undone.`,
+      changes: absorption ? [absorption] : [],
+      confirmLabel: "Delete category",
+      danger: true,
+      run: () => performDelete(category),
+    });
+  }
 
   return (
     <div className="max-w-2xl space-y-6">
@@ -228,7 +361,7 @@ export function CategoryAdminPage() {
             Ranges must cover every weight from 0kg upward with no gaps or overlaps.
           </p>
         </div>
-        {editingId === null && (
+        {editingId === null && !pending && (
           <button
             onClick={startCreate}
             className="flex items-center gap-1.5 rounded-md bg-ink px-3 py-2 text-sm font-medium text-paper hover:opacity-90"
@@ -240,73 +373,85 @@ export function CategoryAdminPage() {
       </div>
 
       {loadError && <ErrorBanner message={loadError} />}
-      {deleteError && <ErrorBanner message={deleteError} />}
+      {actionError && <ErrorBanner message={actionError} />}
 
-      {editingId !== null && showingCascadeConfirmation && (
-        <div className="space-y-4 rounded-lg border border-rust/30 bg-panel p-6">
+      {pending && (
+        <div className={`space-y-4 rounded-lg border bg-panel p-6 ${pending.danger ? "border-rust-dark/40" : "border-rust/30"}`}>
           <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold">Confirm boundary change</h2>
+            <h2 className="text-sm font-semibold">{pending.title}</h2>
             <button
               type="button"
-              onClick={() => {
-                setPendingCascade(null);
-                setPendingValues(null);
-              }}
+              onClick={() => setPending(null)}
               className="text-slate hover:text-ink"
-              aria-label="Back to editing"
+              aria-label="Cancel"
             >
               <X size={18} />
             </button>
           </div>
 
-          <p className="text-sm text-slate">
-            Since category ranges can&rsquo;t have gaps or overlaps, this will also move the
-            neighboring {pendingCascade!.length === 1 ? "category" : "categories"} that shares this boundary:
-          </p>
+          <p className="text-sm text-slate">{pending.description}</p>
 
-          <ul className="space-y-2">
-            {pendingCascade!.map((change, i) => (
-              <li
-                key={i}
-                className="flex items-center justify-between rounded-md border border-line bg-paper px-3 py-2 text-sm"
-              >
-                <span>
-                  <span className="font-medium">{change.neighborName}</span>&rsquo;s {change.field} weight
-                </span>
-                <span className="flex items-center gap-1.5 font-mono text-xs">
-                  {formatKg(change.oldValue)}
-                  <ArrowRight size={12} className="text-slate" />
-                  <span className="font-semibold text-rust-dark">{formatKg(change.newValue)}</span>
-                </span>
-              </li>
-            ))}
-          </ul>
+          {pending.changes.length > 0 && (
+            <ul className="space-y-2">
+              {pending.changes.map((change, i) => (
+                <li key={i} className="rounded-md border border-line bg-paper px-3 py-2 text-sm">
+                  {change.kind === "boundary" ? (
+                    <div className="flex items-center justify-between">
+                      <span>
+                        <span className="font-medium">{change.neighborName}</span>&rsquo;s {change.field} weight
+                      </span>
+                      <span className="flex items-center gap-1.5 font-mono text-xs">
+                        {formatKg(change.oldValue)}
+                        <ArrowRight size={12} className="text-slate" />
+                        <span className="font-semibold text-rust-dark">{formatKg(change.newValue)}</span>
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-1.5 font-medium">
+                        <Split size={14} className="text-rust" />
+                        <span>{change.categoryName}</span> will be split into two categories
+                      </div>
+                      <ul className="ml-5 space-y-1 font-mono text-xs text-slate">
+                        <li>
+                          <span className="font-semibold text-ink">{change.categoryName}</span> keeps{" "}
+                          {formatRange(change.lowerMin, change.lowerMax)}
+                        </li>
+                        <li>
+                          <span className="font-semibold text-rust-dark">{change.upperRemainderName}</span>{" "}
+                          <span className="rounded bg-rust/10 px-1 py-0.5 text-[10px] font-sans font-medium uppercase tracking-wide text-rust-dark">
+                            new
+                          </span>{" "}
+                          covers {formatRange(change.upperMin, change.upperMax)}
+                        </li>
+                      </ul>
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
 
           <div className="flex items-center gap-3 pt-2">
             <button
               type="button"
-              onClick={() => void confirmCascadeAndSave()}
+              onClick={() => void pending.run()}
               disabled={saving}
-              className="flex items-center gap-1.5 rounded-md bg-ink px-4 py-2 text-sm font-medium text-paper hover:opacity-90 disabled:opacity-50"
+              className={`flex items-center gap-1.5 rounded-md px-4 py-2 text-sm font-medium text-paper hover:opacity-90 disabled:opacity-50 ${
+                pending.danger ? "bg-rust-dark" : "bg-ink"
+              }`}
             >
-              <Check size={16} />
-              {saving ? "Saving\u2026" : "Confirm & save"}
+              {pending.danger ? <Trash2 size={16} /> : <Check size={16} />}
+              {saving ? "Working\u2026" : pending.confirmLabel}
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                setPendingCascade(null);
-                setPendingValues(null);
-              }}
-              className="text-sm font-medium text-slate hover:text-ink"
-            >
-              Back to editing
+            <button type="button" onClick={() => setPending(null)} className="text-sm font-medium text-slate hover:text-ink">
+              {editingId !== null ? "Back to editing" : "Cancel"}
             </button>
           </div>
         </div>
       )}
 
-      {editingId !== null && !showingCascadeConfirmation && (
+      {editingId !== null && !pending && (
         <form onSubmit={handleSubmit} className="space-y-4 rounded-lg border border-rust/30 bg-panel p-6">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold">{editingId === "new" ? "New category" : "Edit category"}</h2>
@@ -407,9 +552,7 @@ export function CategoryAdminPage() {
                 </span>
                 <div>
                   <p className="text-sm font-medium">{c.name}</p>
-                  <p className="font-mono text-xs text-slate">
-                    {c.minWeightKg.toFixed(2)}kg &ndash; {c.maxWeightKg === null ? "and above" : `${c.maxWeightKg.toFixed(2)}kg`}
-                  </p>
+                  <p className="font-mono text-xs text-slate">{formatRange(c.minWeightKg, c.maxWeightKg)}</p>
                 </div>
               </div>
               <div className="flex items-center gap-3">
@@ -421,7 +564,7 @@ export function CategoryAdminPage() {
                   Edit
                 </button>
                 <button
-                  onClick={() => void handleDelete(c)}
+                  onClick={() => requestDelete(c)}
                   className="flex items-center gap-1 text-xs font-medium text-slate hover:text-rust-dark"
                 >
                   <Trash2 size={14} />
