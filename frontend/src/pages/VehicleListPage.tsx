@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowUp, ArrowDown, ArrowUpDown, Pencil } from "lucide-react";
+import { ArrowUp, ArrowDown, ArrowUpDown, Pencil, Search, X } from "lucide-react";
 import { vehiclesApi } from "../api/endpoints";
 import { ApiError } from "../api/client";
 import { CategoryIcon } from "../components/CategoryIcon";
@@ -14,11 +14,26 @@ const COLUMNS: { key: SortBy; label: string }[] = [
   { key: "weight", label: "Weight (kg)" },
 ];
 
+/** True if any of the vehicle's searchable fields contain the query (case-insensitive). */
+function matchesSearch(v: Vehicle, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+
+  return (
+    v.ownerName.toLowerCase().includes(q) ||
+    v.manufacturerName.toLowerCase().includes(q) ||
+    v.categoryName.toLowerCase().includes(q) ||
+    String(v.yearOfManufacture).includes(q) ||
+    v.weightKg.toFixed(2).includes(q)
+  );
+}
+
 export function VehicleListPage() {
   const [vehicles, setVehicles] = useState<Vehicle[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<SortBy>("ownerName");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -39,6 +54,14 @@ export function VehicleListPage() {
     };
   }, [sortBy, sortDir]);
 
+  // Filtered client-side, against the already-sorted list, so search stays
+  // instant on every keystroke without a round trip — and still respects
+  // whatever sort order/direction is currently selected.
+  const filteredVehicles = useMemo(() => {
+    if (!vehicles) return null;
+    return vehicles.filter((v) => matchesSearch(v, query));
+  }, [vehicles, query]);
+
   function handleSort(column: SortBy) {
     if (column === sortBy) {
       setSortDir((dir) => (dir === "asc" ? "desc" : "asc"));
@@ -53,17 +76,47 @@ export function VehicleListPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold tracking-tight">Vehicle Register</h1>
         <p className="text-sm text-slate">
-          {vehicles ? `${vehicles.length} vehicle${vehicles.length === 1 ? "" : "s"}` : "Loading\u2026"}
+          {filteredVehicles
+            ? `${filteredVehicles.length} vehicle${filteredVehicles.length === 1 ? "" : "s"}${
+                query ? ` of ${vehicles!.length}` : ""
+              }`
+            : "Loading\u2026"}
         </p>
+      </div>
+
+      <div className="relative max-w-sm">
+        <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate" />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search owner, manufacturer, year, weight, category&hellip;"
+          className="w-full rounded-md border border-line bg-white py-2 pl-9 pr-9 text-sm focus:border-rust"
+          aria-label="Search vehicles"
+        />
+        {query && (
+          <button
+            onClick={() => setQuery("")}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate hover:text-ink"
+            aria-label="Clear search"
+          >
+            <X size={16} />
+          </button>
+        )}
       </div>
 
       {error && <ErrorBanner message={error} />}
 
-      {vehicles && vehicles.length === 0 && !error && (
-        <EmptyState message="No vehicles yet. Add the first one to get started." />
+      {filteredVehicles && filteredVehicles.length === 0 && !error && (
+        <EmptyState
+          message={
+            query
+              ? `No vehicles match "${query}".`
+              : "No vehicles yet. Add the first one to get started."
+          }
+        />
       )}
 
-      {vehicles && vehicles.length > 0 && (
+      {filteredVehicles && filteredVehicles.length > 0 && (
         <div className="overflow-x-auto rounded-lg border border-line bg-panel">
           <table className="w-full min-w-[640px] text-left text-sm">
             <thead>
@@ -93,7 +146,7 @@ export function VehicleListPage() {
               </tr>
             </thead>
             <tbody>
-              {vehicles.map((v) => (
+              {filteredVehicles.map((v) => (
                 <tr key={v.id} className="border-b border-line last:border-0 hover:bg-paper/60">
                   <td className="px-4 py-3">{v.ownerName}</td>
                   <td className="px-4 py-3">{v.manufacturerName}</td>
