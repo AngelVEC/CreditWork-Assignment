@@ -78,17 +78,44 @@ public class CategoryService : ICategoryService
             throw new ValidationApiException($"A category named '{request.Name}' already exists.");
         }
 
-        // Build the "what would the table look like after this edit" set
-        // without touching the tracked entity yet, so we can validate
-        // before committing to the change.
+        var oldMin = category.MinWeightKg;
+        var oldMax = category.MaxWeightKg;
+        var newMin = request.MinWeightKg;
+        var newMax = request.MaxWeightKg;
+
+        // These are tracked entities (no AsNoTracking), so mutating them here
+        // and calling SaveChangesAsync below persists the cascade too.
         var others = await _db.VehicleCategories.Where(c => c.Id != id).ToListAsync();
+
+        // Cascade: a category's min/max boundary is shared with whichever
+        // neighbor currently touches it. Moving *only* this category's side
+        // of that boundary — without telling its neighbor — is exactly what
+        // used to produce "there's a gap"/"that's already covered" errors
+        // even though the intent (move the shared line) was perfectly
+        // valid. So: if the lower boundary moved, find the neighbor whose
+        // Max used to equal it and move that neighbor's Max to match; same
+        // for the upper boundary against a neighbor's Min. The full-set
+        // validation below still runs afterwards and is still authoritative
+        // — this cascade only removes the need to make the same edit twice.
+        if (newMin != oldMin)
+        {
+            var lowerNeighbor = others.FirstOrDefault(c => c.MaxWeightKg == oldMin);
+            if (lowerNeighbor is not null) lowerNeighbor.MaxWeightKg = newMin;
+        }
+
+        if (newMax != oldMax)
+        {
+            var upperNeighbor = others.FirstOrDefault(c => c.MinWeightKg == oldMax);
+            if (upperNeighbor is not null) upperNeighbor.MinWeightKg = newMax.Value;
+        }
+
         var proposedSelf = new VehicleCategory
         {
             Id = id,
             Name = request.Name.Trim(),
             IconKey = request.IconKey.Trim(),
-            MinWeightKg = request.MinWeightKg,
-            MaxWeightKg = request.MaxWeightKg
+            MinWeightKg = newMin,
+            MaxWeightKg = newMax
         };
 
         var validation = _validator.Validate(others.Concat(new[] { proposedSelf }));
