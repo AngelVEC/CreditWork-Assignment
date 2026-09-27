@@ -49,6 +49,7 @@ Use case example based on this design:
 
 1. User added new categories called `Between Light and Medium` with weight range of `400 - 900 kg `. That means it will be in the intersection of Light and Medium's weight range. The frontend will just asking user a confirmation if they want to proceed with the change, while explaining that these range that they inputted is between the range of Light and Medium's weight range. If the user clicked `Confirm`, the backend will grab the value, and automatically readjust the range value of Light and medium.
 Table Preview:
+
 | Category | Weight Range |
 |---|---|
 | Light | 0 - 400 KG |
@@ -58,6 +59,7 @@ Table Preview:
 
 2. User added new categories called `Splitting medium` with weight range of `1100 - 1600 kg`. Because the range are in the middle of medium's weight range. for this special scenario, I am using new approach, called splitting three-way. The backend will automatically split medium into three part, `Medium (1) as lower bound`, `Splitting medium as the range that user inputted`, and `Medium (2) as upper bound`. With this approach, it should fix the underlying problem of any user that want to inserting range value that is within one category.
 Table Preview:
+
 | Category | Weight Range |
 |---|---|
 | Light | 0 - 500 KG |
@@ -69,6 +71,7 @@ Table Preview:
 3. User trying to add new categories called `medium new` with weight range of `400 - 2600 kg`. The user will get an error message, that explained that these ranged are overlapped with `medium` and not able to proceed with this change.
 
 4. User editing the value of `Medium` from `500 - 2500kg` to `400 - 2200kg`. The backend will readjust the value of `Light` and `Heavy` automatically
+
 | Category | Weight Range |
 |---|---|
 | Light | 0 - 400 KG |
@@ -76,12 +79,14 @@ Table Preview:
 | Heavy | 2200 KG and Above |
 
 5. User deleting `Heavy` category. The backend will automated adjust the max range of `Medium` if they are proceed with deletion of Heavy category
+
 | Category | Weight Range |
 |---|---|
 | Light | 0 - 500 KG |
 | Medium | 500 and Above |
 
 6. User deleting `Medium` category while Light and Heavy category still exist. The backend will automatically adjust the maximum value of Light into maximum value of medium.
+
 | Category | Weight Range |
 |---|---|
 | Light | 0 - 2500 KG |
