@@ -12,12 +12,10 @@ public class AuthController : ControllerBase
     public const string CookieName = "cw_auth";
 
     private readonly IAuthService _authService;
-    private readonly IWebHostEnvironment _env;
 
-    public AuthController(IAuthService authService, IWebHostEnvironment env)
+    public AuthController(IAuthService authService)
     {
         _authService = authService;
-        _env = env;
     }
 
     [HttpPost("login")]
@@ -36,7 +34,18 @@ public class AuthController : ControllerBase
         Response.Cookies.Append(CookieName, token, new CookieOptions
         {
             HttpOnly = true,
-            Secure = !_env.IsDevelopment(), // relaxed only for local http dev
+            // Secure if-and-only-if this request actually arrived over
+            // HTTPS — not "are we in Production", which is only ever an
+            // imperfect proxy for that (it breaks both behind a
+            // TLS-terminating proxy/load balancer in real deployments,
+            // where the app itself sees plain HTTP, and in this project's
+            // own WebApplicationFactory-based integration tests, which
+            // talk to the in-process TestServer over HTTP regardless of
+            // configured environment name). A cookie marked Secure is
+            // simply dropped by the client on a non-HTTPS connection
+            // either way, so tying this to the request's actual scheme is
+            // both more correct and self-adjusting.
+            Secure = Request.IsHttps,
             SameSite = SameSiteMode.Strict,
             Expires = session.ExpiresAtUtc,
             Path = "/"

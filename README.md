@@ -291,7 +291,7 @@ both `VehicleFormPage.tsx` (client-side) and `VehicleService.cs`
   full user-management system would be over-engineering for this brief.
 - **Session token:** a JWT is issued on login but is **never exposed to
   JavaScript** — it's set as an `HttpOnly`, `SameSite=Strict` cookie
-  (`Secure` outside of local dev), so it isn't readable by client-side
+  (`Secure` whenever the request actually arrived over HTTPS), so it isn't readable by client-side
   script and isn't sent cross-site. `[Authorize(Roles = "Admin")]` on each
   write endpoint is what actually enforces this per-request; the frontend's
   route guard (`RequireAdmin.tsx`) redirects an unauthenticated visitor to

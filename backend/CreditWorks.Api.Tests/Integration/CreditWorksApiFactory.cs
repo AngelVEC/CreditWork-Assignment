@@ -22,6 +22,19 @@ public class CreditWorksApiFactory : WebApplicationFactory<Program>
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
+        // AuthController sets the auth cookie's Secure flag from
+        // _env.IsDevelopment(). WebApplicationFactory's TestServer talks
+        // over plain HTTP, not HTTPS — if Secure ended up true here (e.g.
+        // because the environment defaulted to something other than
+        // Development), the cookie would still be set on login, but the
+        // .NET HttpClient cookie container silently refuses to resend a
+        // Secure cookie over a non-HTTPS connection. That makes login look
+        // like it succeeds while every subsequent "authenticated" request
+        // comes back 401, which is confusing to debug from the outside.
+        // Forcing Development here keeps the test environment's cookie
+        // behavior matched to its actual (HTTP) transport.
+        builder.UseEnvironment("Development");
+
         builder.ConfigureAppConfiguration((_, config) =>
         {
             config.AddInMemoryCollection(new Dictionary<string, string?>

@@ -2,7 +2,6 @@ using CreditWorks.Api.Data;
 using CreditWorks.Api.Dtos;
 using CreditWorks.Api.Models;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Storage;
 
 namespace CreditWorks.Api.Services;
 
@@ -14,6 +13,17 @@ public interface ICategoryService
     Task DeleteAsync(int id);
 }
 
+/// <summary>
+/// Note on atomicity: each method here does exactly one
+/// <c>SaveChangesAsync()</c> call, even though it may touch several
+/// categories (cascades, splits). A single SaveChangesAsync call is
+/// already wrapped in an implicit transaction by EF Core on a relational
+/// database, so an explicit <c>BeginTransaction</c>/<c>Commit</c> around it
+/// would be redundant — and would also break the EF Core InMemory provider
+/// used by the unit tests, which doesn't support transactions at all. If a
+/// method here ever needs to span more than one SaveChangesAsync call, an
+/// explicit transaction would become necessary again at that point.
+/// </summary>
 public class CategoryService : ICategoryService
 {
     private readonly AppDbContext _db;
@@ -33,8 +43,6 @@ public class CategoryService : ICategoryService
 
     public async Task<CategoryResponse> CreateAsync(CategoryRequest request)
     {
-        await using var transaction = await _db.Database.BeginTransactionAsync();
-
         var nameTaken = await _db.VehicleCategories.AnyAsync(c => c.Name == request.Name.Trim());
         if (nameTaken)
         {
@@ -124,15 +132,12 @@ public class CategoryService : ICategoryService
         _db.VehicleCategories.Add(proposed);
         _db.VehicleCategories.AddRange(newRemainders);
         await _db.SaveChangesAsync();
-        await transaction.CommitAsync();
 
         return ToResponse(proposed);
     }
 
     public async Task<CategoryResponse> UpdateAsync(int id, CategoryRequest request)
     {
-        await using var transaction = await _db.Database.BeginTransactionAsync();
-
         var category = await _db.VehicleCategories.FirstOrDefaultAsync(c => c.Id == id)
             ?? throw new NotFoundApiException(nameof(VehicleCategory), id);
 
@@ -194,15 +199,12 @@ public class CategoryService : ICategoryService
         category.MaxWeightKg = proposedSelf.MaxWeightKg;
 
         await _db.SaveChangesAsync();
-        await transaction.CommitAsync();
 
         return ToResponse(category);
     }
 
     public async Task DeleteAsync(int id)
     {
-        await using var transaction = await _db.Database.BeginTransactionAsync();
-
         var category = await _db.VehicleCategories.FirstOrDefaultAsync(c => c.Id == id)
             ?? throw new NotFoundApiException(nameof(VehicleCategory), id);
 
@@ -237,7 +239,6 @@ public class CategoryService : ICategoryService
 
         _db.VehicleCategories.Remove(category);
         await _db.SaveChangesAsync();
-        await transaction.CommitAsync();
     }
 
     /// <summary>

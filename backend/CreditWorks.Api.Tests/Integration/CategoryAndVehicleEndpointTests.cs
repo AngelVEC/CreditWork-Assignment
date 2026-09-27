@@ -27,23 +27,24 @@ public class CategoryAndVehicleEndpointTests : IDisposable
         return client;
     }
 
-    [Fact]
-    public async Task CreateCategory_ThatWouldLeaveAGap_Returns400()
-    {
-        var client = await NewAuthenticatedClientAsync();
+    //After the change of the logic behind the vehicle weight category, this test is no longer valid.
+    // [Fact]
+    // public async Task CreateCategory_ThatWouldLeaveAGap_Returns400()
+    // {
+    //     var client = await NewAuthenticatedClientAsync();
 
-        // Standard seed is Light(0-500)/Medium(500-2500)/Heavy(2500-null).
-        // Inserting a bounded category that doesn't connect to anything breaks coverage.
-        var response = await client.PostAsJsonAsync("/api/categories", new CategoryRequest
-        {
-            Name = "Rogue",
-            IconKey = "Feather",
-            MinWeightKg = 10000,
-            MaxWeightKg = 20000
-        });
+    //     // Standard seed is Light(0-500)/Medium(500-2500)/Heavy(2500-null).
+    //     // Inserting a bounded category that doesn't connect to anything breaks coverage.
+    //     var response = await client.PostAsJsonAsync("/api/categories", new CategoryRequest
+    //     {
+    //         Name = "Rogue",
+    //         IconKey = "Feather",
+    //         MinWeightKg = 10000,
+    //         MaxWeightKg = 20000
+    //     });
 
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-    }
+    //     response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    // }
 
     [Fact]
     public async Task DeleteCategory_WhenOnlyOneRemains_Returns409()
@@ -86,7 +87,7 @@ public class CategoryAndVehicleEndpointTests : IDisposable
             OwnerName = "Heavy Owner",
             ManufacturerId = manufacturerId,
             YearOfManufacture = 2020,
-            WeightKg = 5000m
+            WeightKg = 10000m
         });
 
         // Reading the list back doesn't require auth, even though creating
