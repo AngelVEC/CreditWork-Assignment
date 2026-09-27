@@ -26,6 +26,12 @@ if we change the value of `light` from 0 to 600kg, `medium` category will also a
 - Adding cascade logic into creation, edit, and delete of vehicle weight categories (Will be explained later)
 - Adding new function on manufacturer where user can directly add new manufacturer when required
 
+# Day 3: testing
+- Making sure that all test case are passed (Apparently there is some of the test case created are failed, and still insepcting what is the problem, the error message can be found at `test-output.txt`)
+- Found the problem that some of test has auth problem when trying to run it, will check if there any fix can be done.
+- Claude keep hallucinating, because it can't run the code directly on their subsystem, and it just debugging the problem based on test-output that I generated and sent to him, while burning the token without any resolution.
+- I decided to comment all the failed test that required authentication.
+- Removing all the comment of failed test that required authentication, with further debugging, have found out the main problem is on the Jwt authentication in program.cs, on the previous code, some of value were assigned to local variables before it got set-up on the JWT, because of this there is a signature-key mismatch.
 
 # Design Choice
 ## Category Administration
@@ -88,3 +94,17 @@ The reasoning behind this is, there is a chance where there will be a new manufa
 ## Vehicle Weight Category
 I am not saving any information of vehicle of category into the database, because if there is any changes on vehicles weight, that means we also need to change the category of that vehicles. That also same with the changes of `vehicle categories`, when Light, Medium, or Heavy had any changes, that means we need to do another update on the vehicle data, when there is more than million of data, that might create a bottleneck on the database because you need to search all vehicles that got affected by this change.
 My approach was simple, what I do is, grabbing the information of the vehicle and the categories, when the weight are within the categories range, that will be the value of that vehicle's category.
+
+## How weight category calculate
+The weight category will be inclusive on the `minimum` value of next category
+for example
+| Category | Weight Range |
+|---|---|
+| Light | 0 - 500 KG |
+| Medium | 500 - 2500 KG |
+| Heavy | 2500 KG and Above |
+
+If vehicle A has 499KG it will assigned as Light
+If vehicle B has 500KG it will assigned as Medium
+If vehicle C has 2499KG it will assigned as Medium
+If vehicle D has 2500 KG it will assigned as Heavy

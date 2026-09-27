@@ -50,9 +50,7 @@ builder.Services.AddCors(options =>
     });
 });
 
-var jwtSigningKey = builder.Configuration["Jwt:SigningKey"];
-var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "CreditWorksVehicleApp";
-var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "CreditWorksVehicleApp";
+var configuration = builder.Configuration;
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -60,13 +58,13 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
-            ValidIssuer = jwtIssuer,
+            ValidIssuer = configuration["Jwt:Issuer"] ?? "CreditWorksVehicleApp",
             ValidateAudience = true,
-            ValidAudience = jwtAudience,
+            ValidAudience = configuration["Jwt:Audience"] ?? "CreditWorksVehicleApp",
             ValidateLifetime = true,
             ValidateIssuerSigningKey = true,
             IssuerSigningKey = new SymmetricSecurityKey(
-                Encoding.UTF8.GetBytes(jwtSigningKey ?? "dev-only-placeholder-key-not-for-production-use")),
+                Encoding.UTF8.GetBytes(configuration["Jwt:SigningKey"] ?? "dev-only-placeholder-key-not-for-production-use")),
             ClockSkew = TimeSpan.FromSeconds(30)
         };
 

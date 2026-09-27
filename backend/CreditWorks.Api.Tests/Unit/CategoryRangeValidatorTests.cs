@@ -29,10 +29,14 @@ public class CategoryRangeValidatorTests
     public void Validate_GapBetweenRanges_IsRejected()
     {
         // Matches the assignment's own invalid example: Light 0-500, Medium 600-2500.
+        // Heavy is included, unbounded, purely so the "highest category
+        // must be unbounded" rule doesn't fire first and mask the gap
+        // check this test is actually exercising.
         var categories = new[]
         {
             Cat("Light", 0, 500),
             Cat("Medium", 600, 2500),
+            Cat("Heavy", 2500, null),
         };
 
         var result = _validator.Validate(categories);
@@ -45,10 +49,12 @@ public class CategoryRangeValidatorTests
     public void Validate_OverlappingRanges_IsRejected()
     {
         // Matches the assignment's own invalid example: Light 0-600, Medium 500-2500.
+        // Heavy is included, unbounded, for the same reason as above.
         var categories = new[]
         {
             Cat("Light", 0, 600),
             Cat("Medium", 500, 2500),
+            Cat("Heavy", 2500, null),
         };
 
         var result = _validator.Validate(categories);
