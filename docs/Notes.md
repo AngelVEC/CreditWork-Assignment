@@ -33,10 +33,10 @@ if we change the value of `light` from 0 to 600kg, `medium` category will also a
 - I decided to comment all the failed test that required authentication.
 - Removing all the comment of failed test that required authentication, with further debugging, have found out the main problem is on the Jwt authentication in program.cs, on the previous code, some of value were assigned to local variables before it got set-up on the JWT, because of this there is a signature-key mismatch.
 
-# Design Choice
+# Design Choice based on assumption
 ## Category Administration
 This feature is the feature that took most of my times and claude token to finalize. at the early stage, the code on this specific features were working until I tried creating, editing, and deleting categories.
-because of validation on the backend already got set-up by claude based on the markdown files, there is no way to add, edit or remove any categories because of `gaps` and `overlaps`.
+because of validation on the backend already got set-up by claude based on the markdown files, there is no way to add, edit or remove any categories because of `gaps` and `overlaps` (This was created based on assumption, and trade-off for prevent any `gaps` or `overlaps`).
 After doing of some research, I decided to change a bit of my approach on this, and using cascading logic to finalize the implementation of this features.
 With cascade logic, whenever the user or admin adding, editing, or deleteing categories, it will check if there is `overlaps and gaps` that might happen on other existing categories, and automatically fix the problem by readjusting the range of other categories.
 
@@ -113,3 +113,13 @@ If vehicle A has 499KG it will assigned as Light
 If vehicle B has 500KG it will assigned as Medium
 If vehicle C has 2499KG it will assigned as Medium
 If vehicle D has 2500 KG it will assigned as Heavy
+
+# Future improvement
+## Using Agent for database orchestrator
+Implement AI agent to do database CRUD, the reason is, instead of writing the old fashion way where we define a function that limited to one particular function to perform CRUD, we can automate this process by delegating the task to AI agent by connecting it to the database. But, we also need to put guardrail to make sure that AI didn't do some weird task, for example deleting entire database or accessing some information that they are not supposed to access.
+We could also use the AI agent to give us a summary of the data that we are looking for with the help of MCP (Model Context Protocol), where it can produce something similar as data analyst, but less hallucinations, because its working directly on the data that provided, instead of spewing some randoms informations.
+There is also trade-off from using this approach, for example token cost, and some hiccups where there is still a chance that the model will still hallucinated (it might get betters when new models coming out in few years)
+
+## Change on the current sorting
+This will depends on how many users/data needed to be processed. for example, on the current code, I don't have many data to begin with, it's more better to do the sorting by frontend side, because it can reduce the backend and database server load.
+but when there is large datasets, the current method is still the best to used, where asking the backend to do the sort.
